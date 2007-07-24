@@ -4,6 +4,9 @@ import sys, os, re, pymssql, ConfigParser
 from optparse import OptionParser
 
 SCHEMA_INFO = 'schema_info'
+PROC_DIR = 'procedures'
+FUNC_DIR = 'functions'
+MIGR_DIR = 'migration'
 
 def listdir(dir):
 	ret = [ ]
@@ -39,9 +42,6 @@ def get_options(filename):
 	ret.update(cnf.defaults())
 	return ret
 
-"""
-PROC_DIR = 'procs'
-
 def dump_procs(cur):
 	ret = []
 	query = 'SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES'
@@ -54,13 +54,12 @@ def dump_procs(cur):
 		})
 	return ret
 
-def save_proc(proc):
-	fname = '%s%s%s.sql' % (PROC_DIR, os.sep, proc['name'])
+def save_proc(dir, proc):
+	fname = dir + os.sep + proc['name'] + '.sql'
 	print 'writing %s' % fname
 	f = open(fname, 'w')
 	f.write(proc['definition'])
 	f.close()
-"""
 
 def migrate(servers, schema_dir):
 	print 'migrating...'
@@ -109,16 +108,13 @@ def get_scripts(dir):
 			sys.exit(1)
 		return n1 - n2
 		
-	func_dir = 'functions'
-	proc_dir = 'procedures'
-	migr_dir = 'migration'
 	ret = {
 		'migration': [ ],
 		'procedures': [ ],
 		'functions': [ ],
 	}
-	for script in listdir(dir + os.sep + migr_dir):
-		file = open(dir + os.sep + migr_dir + os.sep + script)
+	for script in listdir(dir + os.sep + MIGR_DIR):
+		file = open(dir + os.sep + MIGR_DIR + os.sep + script)
 		ret['migration'].append({
 			'script': script,
 			'sql': ''.join(file.readlines()),
@@ -126,18 +122,39 @@ def get_scripts(dir):
 		ret['migration'].sort(cmp, lambda elem: elem['script'])
 	return ret
 
-def main():
-	parser = OptionParser(usage="usage: %prog [-c CONFIG] action schema_directory")
-	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use. Default is "%default"')
-	(options, args) = parser.parse_args()
-	if len(sys.argv[1:]) == 0 or len(args) != 2:
-		parser.print_help()
-	schema_dir = args[1]
-	options = get_options(options.config)
-	servers = options['servers']
+def action_migrate(options, args, config):
+	schema_dir = args[0]
+	servers = config['servers']
 	#~ TODO: кто обнуляет SCHEMA_INFO?
 	#~ SCHEMA_INFO = options['schema_table']
 	migrate(servers, schema_dir)
+
+def action_dump(options, args, config):
+	con = pymssql.connect(database=options.database, **config['servers'][options.database])
+	cur = con.cursor()
+	procs = dump_procs(cur)
+	con.close()
+	dir = args[0] + os.sep + PROC_DIR
+	if not os.path.exists(dir):
+		os.makedirs(dir)
+	for proc in procs:
+		save_proc(dir, proc)
+	
+def main():
+	parser = OptionParser(usage="usage: %prog [-c CONFIG] [-d DATABASE] {migrate|dump} schema_directory")
+	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use. Default is "%default"')
+	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
+	(options, args) = parser.parse_args()
+	config = get_options(options.config)
+	if len(sys.argv[1:]) == 0 or len(args) != 2:
+		parser.print_help()
+		sys.exit()
+
+	actions = {
+		'migrate': action_migrate,
+		'dump': action_dump,
+	}
+	actions[args[0]](options, args[1:], config)
 
 if __name__ == '__main__':
 	main()
