@@ -86,40 +86,67 @@ def find_collision(cursor):
 def migrate_db(db_dir, cursor):
 	query = "select * from %s" % SCHEMA_INFO
 	cursor.execute(query)
-	schema_info = cursor.fetchone()
-	print 'Schema info: version %i, last update %s' % (schema_info[0], schema_info[1]) 
+	(db_version, last_update) = cursor.fetchone()
 	scripts = get_scripts(db_dir)
-	#~ print dir(cur)
-	#~ print scripts['migration']
-	for script in scripts['migration']:
-		pass
+	to_version = extract_version(scripts[MIGR_DIR][-1]['script'])
+	if (to_version <= db_version):
+		print 'Noting to update (db version %i, current version %i' % (db_version, to_version)
+		return
+	print 'Schema info: version %i, last update %s, updating to version %i' % (db_version, last_update, to_version)
+	for script in scripts[MIGR_DIR]:
+		script_version = extract_version(script['script'])
+		if script_version > db_version:
+			print 'runnig script %s' % script['script']
+			cursor.execute(script['sql'])
+		
+	for script in scripts[PROC_DIR]:
+		proc_name = os.path.splitext(script['script'])[0]
+		#~ TODO: почему подстановка ? не работает в pymssql?
+		#~ query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = ?'
+		#~ cursor.execute(query, (proc_name)
+		query = "SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = '%s'" % proc_name
+		cursor.execute(query)
+		if cursor.rowcount > 0:
+			print "dropping procedure %s" % proc_name
+			query = "drop procedure %s" % proc_name
+			cursor.execute(query)
+		print "creating procedure %s" % proc_name
 		cursor.execute(script['sql'])
 	
-	query = "update %s set schema_version = schema_version +1, last_update = getdate()" % SCHEMA_INFO
-	cursor.execute(query)
+	print 'Updating %s table' % SCHEMA_INFO
+	if script_version > db_version:
+		query = 'update %s set schema_version = %i, last_update = getdate()' % (SCHEMA_INFO, to_version)
+	else:
+		query = 'update %s set last_update = getdate()' % SCHEMA_INFO
+		cursor.execute(query)
+
+def extract_version(file):
+	try:
+		version = int(re.sub(r'\D', '', file))
+	except ValueError:
+		print "Error: incorrect file name: %s" % file
+		sys.exit(1)
+	return version
 
 def get_scripts(dir):
 	def cmp(f1, f2):
-		try:
-			n1 = int(re.sub(r'\D', '', f1))
-			n2 = int(re.sub(r'\D', '', f2))
-		except ValueError:
-			print "Error: incorrect file names: %s, %s" % (f1, f2)
-			sys.exit(1)
+		n1 = extract_version(f1)
+		n2 = extract_version(f2)
 		return n1 - n2
 		
 	ret = {
-		'migration': [ ],
-		'procedures': [ ],
-		'functions': [ ],
+		MIGR_DIR: [ ],
+		PROC_DIR: [ ],
+		FUNC_DIR: [ ],
 	}
-	for script in listdir(dir + os.sep + MIGR_DIR):
-		file = open(dir + os.sep + MIGR_DIR + os.sep + script)
-		ret['migration'].append({
-			'script': script,
-			'sql': ''.join(file.readlines()),
-		})
-		ret['migration'].sort(cmp, lambda elem: elem['script'])
+	for type in ret:
+		for script in listdir(dir + os.sep + type):
+			file = open(dir + os.sep + type + os.sep + script)
+			ret[type].append({
+				'script': script,
+				'sql': ''.join(file.readlines()),
+			})
+			ret[type].sort(cmp, lambda elem: elem['script'])
 	return ret
 
 def action_migrate(options, args, config):
@@ -139,7 +166,8 @@ def action_dump(options, args, config):
 		os.makedirs(dir)
 	for proc in procs:
 		save_proc(dir, proc)
-	
+
+
 def main():
 	parser = OptionParser(usage="usage: %prog [-c CONFIG] [-d DATABASE] {migrate|dump} schema_directory")
 	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use. Default is "%default"')
@@ -158,13 +186,3 @@ def main():
 
 if __name__ == '__main__':
 	main()
-
-#~ con = pymssql.connect(host='192.168.21.12', user='supervisor', password='tg64th', database='AdventureWorks')
-
-
-
-
-#~ query="create table pymssql (col1 int);"
-#~ cur.execute(query)
-#~ print "create table: %d" % cur.rowcount
-#~ con.commit()
