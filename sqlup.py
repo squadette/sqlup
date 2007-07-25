@@ -1,6 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-__version__ = "$Revision: 1 $"
-# $Source$
+__version__ = "$Rev$"
 
 import sys, os, re, pymssql, ConfigParser
 from optparse import OptionParser
