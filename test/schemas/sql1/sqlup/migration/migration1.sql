@@ -13,3 +13,9 @@ CREATE TABLE [dbo].[DatabaseLog](
 	[DatabaseLogID] ASC
 )WITH (PAD_INDEX  = OFF, IGNORE_DUP_KEY = OFF) ON [PRIMARY]
 ) ON [PRIMARY]
+
+-- SQLUP-CUT
+-- rollback script
+
+DROP TABLE [dbo].[DatabaseLog]
+

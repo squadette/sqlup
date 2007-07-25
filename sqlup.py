@@ -7,6 +7,7 @@ from optparse import OptionParser
 PROC_DIR = 'procedures'
 FUNC_DIR = 'functions'
 MIGR_DIR = 'migration'
+SQLUP_CUT='-- SQLUP-CUT'
 
 def listdir(dir):
 	"""
@@ -73,7 +74,7 @@ def save_routine(dir, proc):
 	f.write(proc['definition'])
 	f.close()
 
-def migrate(servers, schema_dir):
+def migrate(servers, schema_dir, rollback=False, to_version=None):
 	"""
 	Выполняет миграцию схемы из данной директории на сервера из списка
 	"""
@@ -82,12 +83,44 @@ def migrate(servers, schema_dir):
 	for server in listdir(schema_dir):
 		for db in listdir(schema_dir + os.sep + server):
 			db_dir = schema_dir + os.sep + server + os.sep + db
+			if rollback:
+				scripts = get_scripts(db_dir, reverse=True)
+			else:
+				scripts = get_scripts(db_dir)
+				to_version = extract_version(scripts[MIGR_DIR][-1]['script'])
+			
 			conf = servers[server]
 			conf['database'] = db
 			con = pymssql.connect(**conf)
 			cur = con.cursor()
+			
 			find_collision(cur)
-			migrate_db(db_dir, cur)
+			(db_version, last_update) = schema_info(cur)
+			print 'Schema info: version %i, last update %s' % (db_version, last_update.strftime('%Y-%m-%d %H:%M'))
+			if rollback:
+				if (to_version < db_version):
+					print 'Migrating database schema to version %i' % to_version
+					versions = range(to_version + 1, db_version + 1)
+					versions.reverse()
+					migrate_db(scripts, versions, cur, field='sqldown')
+					print 'Updating schema_info table'
+					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
+					cur.execute(query)
+				else:
+					print 'Database schema version %i, no need to rollback schema' % to_version
+			else:
+				if (to_version > db_version):
+					print 'Migrating database schema to version %i' % to_version
+					versions = range(db_version + 1, to_version + 1)
+					migrate_db(scripts, versions, cur)
+					print 'Updating schema_info table'
+					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
+					cur.execute(query)
+				else:
+					print 'Migration scripts version %i, no need to update schema' % to_version
+
+			update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
+			
 			con.commit()
 			con.close()
 
@@ -102,29 +135,22 @@ def find_collision(cursor):
 			print "Collistion detected: stored procedure %s was altered after last schema update" % data[0]
 		sys.exit(1)
 
-def migrate_db(db_dir, cursor):
+def schema_info(cursor):
 	"""
-	Основной код миграции: мигрирует схему из данной диретории в одну базу
+	Возвращает список (версия, время_последнего апдейта) для текущей БД
 	"""
 	
 	query = 'select * from schema_info'
 	cursor.execute(query)
 	(db_version, last_update) = cursor.fetchone()
-	scripts = get_scripts(db_dir)
-	to_version = extract_version(scripts[MIGR_DIR][-1]['script'])
-	print 'Schema info: version %i, last update %s' % (db_version, last_update.strftime('%Y-%m-%d %H:%M'))
-	if (to_version > db_version):
-		print 'Updating database schema to version %i' % to_version
-		for script in scripts[MIGR_DIR]:
-			script_version = extract_version(script['script'])
-			if script_version > db_version:
-				print 'runnig script %s' % script['script']
-				cursor.execute(script['sql'])
-	else:
-		print 'Migration scripts version %i, there is no need to update schema' % to_version
-		
+	return (db_version, last_update)
+
+def update_routines(scripts, cursor):
+	"""
+	Обновляет хранимые процедуры и функции в текущей БД
+	"""
 	print 'Updating routines:'
-	for script in scripts[PROC_DIR] + scripts[FUNC_DIR]:
+	for script in scripts:
 		proc_name = os.path.splitext(script['script'])[0]
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
@@ -134,13 +160,20 @@ def migrate_db(db_dir, cursor):
 			cursor.execute(query)
 		print '\tcreating routine %s' % proc_name
 		cursor.execute(script['sql'])
-	
-	print 'Updating schema_info table'
-	if to_version > db_version:
-		query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
-	else:
-		query = 'update schema_info set last_update = getdate()'
+	print 'Updating schema_info.last_update'
+	query = 'update schema_info set last_update = getdate()'
 	cursor.execute(query)
+
+def migrate_db(scripts, versions, cursor, field='sqlup'):
+	"""
+	Основной код миграции: мигрирует схему из данной директории в одну базу. 
+	"""
+	
+	for script in scripts[MIGR_DIR]:
+		script_version = extract_version(script['script'])
+		if script_version in versions and field in script:
+			print '\trunnig %s from script %s' % (field, script['script'])
+			cursor.execute(script[field])
 
 def extract_version(file):
 	"""
@@ -154,7 +187,7 @@ def extract_version(file):
 		sys.exit(1)
 	return version
 
-def get_scripts(dir):
+def get_scripts(dir, reverse=False):
 	"""
 	Читает список скриптов из dir, сортирует их по цифрам в имени,
 	возвращает массив вида:
@@ -173,21 +206,28 @@ def get_scripts(dir):
 		n2 = extract_version(f2)
 		return n1 - n2
 		
-	ret = {
-		MIGR_DIR: [ ],
-		PROC_DIR: [ ],
-		FUNC_DIR: [ ],
-	}
-	for type in ret:
+	ret = { }
+	for type in listdir(dir):
+		ret[type] = [ ]
 		for script in listdir(dir + os.sep + type):
 			file = open(dir + os.sep + type + os.sep + script)
+			sql = ''.join(file.readlines())
+			(sqlup, sqldown) = ('', '')
+			if type == MIGR_DIR:
+				sql_parts = sql.split(SQLUP_CUT)
+				sqlup = sql_parts[0]
+				if len(sql_parts) > 1:
+					sqldown = sql_parts[1]
+				
 			ret[type].append({
 				'script': script,
-				'sql': ''.join(file.readlines()),
+				'sql': sql,
+				'sqlup': sqlup,
+				'sqldown': sqldown,
 				# для получения SQL-типа тупо обрезаем последнюю букву. It works for me
 				'type': type[:-1]
 			})
-			ret[type].sort(cmp, lambda elem: elem['script'])
+			ret[type].sort(cmp, lambda elem: elem['script'], reverse)
 	return ret
 
 class WantArgs:
@@ -218,6 +258,13 @@ def action_migrate(options, args, config):
 	schema_dir = args[0]
 	servers = config['servers']
 	migrate(servers, schema_dir)
+
+@WantArgs(2)
+def action_rollback(options, args, config):
+	schema_dir = args[0]
+	to_version = int(args[1])
+	servers = config['servers']
+	migrate(servers, schema_dir, rollback=True, to_version=to_version)
 
 @WantArgs(1)
 def action_dump(options, args, config):
@@ -255,7 +302,9 @@ def main():
 	где ACTION - первый позиционный параметр
 	"""
 	
-	parser = OptionParser(usage="usage: %prog [-c CONFIG] [-d DATABASE] {migrate|dump} schema_directory", version=__version__)
+	parser = OptionParser(
+		usage="usage: %prog [-c CONFIG] [-d DATABASE] action schema_directory\npossible actions: migrate, rollback, dump, doc",
+		version=__version__)
 	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use. Default is "%default"')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
 	(options, args) = parser.parse_args()
@@ -263,6 +312,7 @@ def main():
 
 	actions = {
 		'migrate': action_migrate,
+		'rollback': action_rollback,
 		'dump': action_dump,
 		'doc': action_doc,
 	}
