@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-__version__ = "$Rev$"
+__version__ = "$Id$"
 
 import sys, os, re, pymssql, ConfigParser
 from optparse import OptionParser
@@ -48,13 +48,13 @@ def get_config(filename):
 	ret.update(cnf.defaults())
 	return ret
 
-def dump_procs(cur):
+def dump_routines(cur, type):
 	"""
-	Выбирает все процедуры и функции, возвращает массивом
+	Выбирает из information_schema.routines объекты указанного типа, возвращает массивом
 	"""
 	ret = []
-	query = 'SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES'
-	cur.execute(query)
+	query = 'SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES where routine_type = %s'
+	cur.execute(query, (type,))
 	for proc in cur.fetchall():
 		ret.append({
 			'name': proc[0],
@@ -63,9 +63,9 @@ def dump_procs(cur):
 		})
 	return ret
 
-def save_proc(dir, proc):
+def save_routine(dir, proc):
 	"""
-	Сохраняет процедуру в файле в указанной директории
+	Сохраняет код процедуры или функции в файле в указанной директории
 	"""
 	fname = dir + os.sep + proc['name'] + '.sql'
 	print 'writing %s' % fname
@@ -112,29 +112,29 @@ def migrate_db(db_dir, cursor):
 	(db_version, last_update) = cursor.fetchone()
 	scripts = get_scripts(db_dir)
 	to_version = extract_version(scripts[MIGR_DIR][-1]['script'])
-	if (to_version <= db_version):
-		print 'Noting to update (db version %i, current version %i' % (db_version, to_version)
-		return
-	print 'Schema info: version %i, last update %s, updating to version %i' % (db_version, last_update, to_version)
-	for script in scripts[MIGR_DIR]:
-		script_version = extract_version(script['script'])
-		if script_version > db_version:
-			print 'runnig script %s' % script['script']
-			cursor.execute(script['sql'])
+	print 'Schema info: version %i, last update %s' % (db_version, last_update)
+	if (to_version > db_version):
+		print 'Updating database schema to version %i' % to_version
+		for script in scripts[MIGR_DIR]:
+			script_version = extract_version(script['script'])
+			if script_version > db_version:
+				print 'runnig script %s' % script['script']
+				cursor.execute(script['sql'])
 		
-	for script in scripts[PROC_DIR]:
+	print 'Updating routines'
+	for script in scripts[PROC_DIR] + scripts[FUNC_DIR]:
 		proc_name = os.path.splitext(script['script'])[0]
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
-			print 'dropping procedure %s' % proc_name
-			query = 'drop procedure %s' % proc_name
+			print 'dropping routine %s' % proc_name
+			query = 'drop %s %s' % (script['type'], proc_name)
 			cursor.execute(query)
-		print 'creating procedure %s' % proc_name
+		print 'creating routine %s' % proc_name
 		cursor.execute(script['sql'])
 	
 	print 'Updating schema_info table'
-	if script_version > db_version:
+	if to_version > db_version:
 		query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
 	else:
 		query = 'update schema_info set last_update = getdate()'
@@ -182,6 +182,7 @@ def get_scripts(dir):
 			ret[type].append({
 				'script': script,
 				'sql': ''.join(file.readlines()),
+				'type': type[:-1]
 			})
 			ret[type].sort(cmp, lambda elem: elem['script'])
 	return ret
@@ -217,15 +218,29 @@ def action_migrate(options, args, config):
 
 @WantArgs(1)
 def action_dump(options, args, config):
+	if not options.database in config['servers']:
+		print "Error: no database %s in config file" % options.database
+		return
 	con = pymssql.connect(database=options.database, **config['servers'][options.database])
 	cur = con.cursor()
-	procs = dump_procs(cur)
-	con.close()
+	
+	#~ TODO: какое-то тупое дублирование кода, подумать
+	
+	procs = dump_routines(cur, 'procedure')
 	dir = args[0] + os.sep + PROC_DIR
 	if not os.path.exists(dir):
 		os.makedirs(dir)
 	for proc in procs:
-		save_proc(dir, proc)
+		save_routine(dir, proc)
+	
+	funcs = dump_routines(cur, 'function')
+	dir = args[0] + os.sep + FUNC_DIR
+	if not os.path.exists(dir):
+		os.makedirs(dir)
+	for func in funcs:
+		save_routine(dir, func)
+
+	con.close()
 
 @WantArgs(0)
 def action_doc(options, args, config):
@@ -237,7 +252,7 @@ def main():
 	где ACTION - первый позиционный параметр
 	"""
 	
-	parser = OptionParser(usage="usage: %prog [-c CONFIG] [-d DATABASE] {migrate|dump} schema_directory")
+	parser = OptionParser(usage="usage: %prog [-c CONFIG] [-d DATABASE] {migrate|dump} schema_directory", version=__version__)
 	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use. Default is "%default"')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
 	(options, args) = parser.parse_args()
