@@ -112,7 +112,7 @@ def migrate_db(db_dir, cursor):
 	(db_version, last_update) = cursor.fetchone()
 	scripts = get_scripts(db_dir)
 	to_version = extract_version(scripts[MIGR_DIR][-1]['script'])
-	print 'Schema info: version %i, last update %s' % (db_version, last_update)
+	print 'Schema info: version %i, last update %s' % (db_version, last_update.strftime('%Y-%m-%d %H:%M'))
 	if (to_version > db_version):
 		print 'Updating database schema to version %i' % to_version
 		for script in scripts[MIGR_DIR]:
@@ -120,17 +120,19 @@ def migrate_db(db_dir, cursor):
 			if script_version > db_version:
 				print 'runnig script %s' % script['script']
 				cursor.execute(script['sql'])
+	else:
+		print 'Migration scripts version %i, there is no need to update schema' % to_version
 		
-	print 'Updating routines'
+	print 'Updating routines:'
 	for script in scripts[PROC_DIR] + scripts[FUNC_DIR]:
 		proc_name = os.path.splitext(script['script'])[0]
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
-			print 'dropping routine %s' % proc_name
+			print '\tdropping routine %s' % proc_name
 			query = 'drop %s %s' % (script['type'], proc_name)
 			cursor.execute(query)
-		print 'creating routine %s' % proc_name
+		print '\tcreating routine %s' % proc_name
 		cursor.execute(script['sql'])
 	
 	print 'Updating schema_info table'
@@ -182,6 +184,7 @@ def get_scripts(dir):
 			ret[type].append({
 				'script': script,
 				'sql': ''.join(file.readlines()),
+				# для получения SQL-типа тупо обрезаем последнюю букву. It works for me
 				'type': type[:-1]
 			})
 			ret[type].sort(cmp, lambda elem: elem['script'])
