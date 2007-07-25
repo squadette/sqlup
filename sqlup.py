@@ -107,7 +107,7 @@ def migrate(servers, schema_dir, rollback=False, to_version=None):
 					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
 					cur.execute(query)
 				else:
-					print 'Database schema version %i, no need to rollback schema' % to_version
+					print 'Database schema version %i, no need to rollback schema' % db_version
 			else:
 				if (to_version > db_version):
 					print 'Migrating database schema to version %i' % to_version
