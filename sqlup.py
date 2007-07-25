@@ -1,21 +1,28 @@
 ﻿# -*- coding: utf-8 -*-
+__version__ = "$Revision: 1 $"
+# $Source$
 
 import sys, os, re, pymssql, ConfigParser
 from optparse import OptionParser
 
-SCHEMA_INFO = 'schema_info'
 PROC_DIR = 'procedures'
 FUNC_DIR = 'functions'
 MIGR_DIR = 'migration'
 
 def listdir(dir):
+	"""
+	Замена стандартному os.listdir, пропускает файлы с именами начинающимися с '.'
+	"""
 	ret = [ ]
 	for str in os.listdir(dir):
 		if not str.startswith('.'):
 			ret.append(str)
 	return ret
 
-def get_options(filename):
+def get_config(filename):
+	"""
+	Читает конфиг-файл
+	"""
 	try:
 		cnfFile = open(filename)
 	except IOError:
@@ -43,6 +50,9 @@ def get_options(filename):
 	return ret
 
 def dump_procs(cur):
+	"""
+	Выбирает все процедуры и функции, возвращает массивом
+	"""
 	ret = []
 	query = 'SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES'
 	cur.execute(query)
@@ -55,6 +65,9 @@ def dump_procs(cur):
 	return ret
 
 def save_proc(dir, proc):
+	"""
+	Сохраняет процедуру в файле в указанной директории
+	"""
 	fname = dir + os.sep + proc['name'] + '.sql'
 	print 'writing %s' % fname
 	f = open(fname, 'w')
@@ -62,6 +75,10 @@ def save_proc(dir, proc):
 	f.close()
 
 def migrate(servers, schema_dir):
+	"""
+	Выполняет миграцию схемы из данной директории на сервера из списка
+	"""
+	
 	print 'migrating...'
 	for server in listdir(schema_dir):
 		for db in listdir(schema_dir + os.sep + server):
@@ -76,6 +93,9 @@ def migrate(servers, schema_dir):
 			con.close()
 
 def find_collision(cursor):
+	"""
+	Ищет, типа, коллизии
+	"""
 	query = 'select specific_name, last_altered from INFORMATION_SCHEMA.ROUTINES t, schema_info s where t.last_altered > s.last_update'
 	cursor.execute(query)
 	if cursor.rowcount > 0:
@@ -84,7 +104,11 @@ def find_collision(cursor):
 		sys.exit(1)
 
 def migrate_db(db_dir, cursor):
-	query = "select * from %s" % SCHEMA_INFO
+	"""
+	Основной код миграции: мигрирует схему из данной диретории в одну базу
+	"""
+	
+	query = 'select * from schema_info'
 	cursor.execute(query)
 	(db_version, last_update) = cursor.fetchone()
 	scripts = get_scripts(db_dir)
@@ -101,26 +125,27 @@ def migrate_db(db_dir, cursor):
 		
 	for script in scripts[PROC_DIR]:
 		proc_name = os.path.splitext(script['script'])[0]
-		#~ TODO: почему подстановка ? не работает в pymssql?
-		#~ query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = ?'
-		#~ cursor.execute(query, (proc_name)
-		query = "SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = '%s'" % proc_name
-		cursor.execute(query)
+		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
+		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
-			print "dropping procedure %s" % proc_name
-			query = "drop procedure %s" % proc_name
+			print 'dropping procedure %s' % proc_name
+			query = 'drop procedure %s' % proc_name
 			cursor.execute(query)
-		print "creating procedure %s" % proc_name
+		print 'creating procedure %s' % proc_name
 		cursor.execute(script['sql'])
 	
-	print 'Updating %s table' % SCHEMA_INFO
+	print 'Updating schema_info table'
 	if script_version > db_version:
-		query = 'update %s set schema_version = %i, last_update = getdate()' % (SCHEMA_INFO, to_version)
+		query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
 	else:
-		query = 'update %s set last_update = getdate()' % SCHEMA_INFO
-		cursor.execute(query)
+		query = 'update schema_info set last_update = getdate()'
+	cursor.execute(query)
 
 def extract_version(file):
+	"""
+	Выдирает все цифры из имени файла и склеивает их в INT
+	"""
+	
 	try:
 		version = int(re.sub(r'\D', '', file))
 	except ValueError:
@@ -129,6 +154,19 @@ def extract_version(file):
 	return version
 
 def get_scripts(dir):
+	"""
+	Читает список скриптов из dir, сортирует их по цифрам в имени,
+	возвращает массив вида:
+	{
+		директория1:
+			[
+				{script: имя_файла, sql: код_скрипта},
+				{...}
+			],
+		директория2: ...
+	}
+	"""
+	
 	def cmp(f1, f2):
 		n1 = extract_version(f1)
 		n2 = extract_version(f2)
@@ -149,13 +187,36 @@ def get_scripts(dir):
 			ret[type].sort(cmp, lambda elem: elem['script'])
 	return ret
 
+class WantArgs:
+	"""
+	<СложнаяШтука>
+	
+	Это сделано, чтобы не проверять по отдельности в каждом action'е,
+	сколько ему пришло параметров. Экземпляр класса - это callable-выражение,
+	при вызове возвращающее функцию-декоратор, которая знает, сколько элементов
+	в массиве args должно придти декорируемой фунции.
+	
+	</СложнаяШтука>
+	"""
+	
+	def __init__(self, n):
+		self.n = n
+	
+	def __call__(self, f):
+		def check(options, args, config):
+			if len(args) != self.n:
+				print 'Error: this action requires %i argument(s)' % self.n
+				return
+			f(options, args, config)
+		return check
+
+@WantArgs(1)
 def action_migrate(options, args, config):
 	schema_dir = args[0]
 	servers = config['servers']
-	#~ TODO: кто обнуляет SCHEMA_INFO?
-	#~ SCHEMA_INFO = options['schema_table']
 	migrate(servers, schema_dir)
 
+@WantArgs(1)
 def action_dump(options, args, config):
 	con = pymssql.connect(database=options.database, **config['servers'][options.database])
 	cur = con.cursor()
@@ -167,21 +228,30 @@ def action_dump(options, args, config):
 	for proc in procs:
 		save_proc(dir, proc)
 
+@WantArgs(0)
+def action_doc(options, args, config):
+	print help('sqlup')
 
 def main():
+	"""
+	Разбирает параметры командной строки, читает конфиг и вызывает функцию action_ACTION,
+	где ACTION - первый позиционный параметр
+	"""
+	
 	parser = OptionParser(usage="usage: %prog [-c CONFIG] [-d DATABASE] {migrate|dump} schema_directory")
 	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use. Default is "%default"')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
 	(options, args) = parser.parse_args()
-	config = get_options(options.config)
-	if len(sys.argv[1:]) == 0 or len(args) != 2:
-		parser.print_help()
-		sys.exit()
+	config = get_config(options.config)
 
 	actions = {
 		'migrate': action_migrate,
 		'dump': action_dump,
+		'doc': action_doc,
 	}
+	if len(args) == 0 or not args[0] in actions:
+		parser.print_help()
+		sys.exit()
 	actions[args[0]](options, args[1:], config)
 
 if __name__ == '__main__':
