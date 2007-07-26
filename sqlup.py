@@ -78,7 +78,7 @@ def save_routine(dir, proc):
 	f.write(proc['definition'])
 	f.close()
 
-def migrate(servers, schema_dir, rollback=False, to_version=None):
+def migrate(servers, schema_dir, rollback=False, to_version=None, skip=[]):
 	"""
 	Выполняет миграцию схемы из данной директории на сервера из списка
 	"""
@@ -101,25 +101,29 @@ def migrate(servers, schema_dir, rollback=False, to_version=None):
 			(db_version, last_update) = schema_info(cur)
 			print 'Schema info: version %i, last update %s' % (db_version, last_update.strftime('%Y-%m-%d %H:%M'))
 			update_needed = (rollback and to_version < db_version) or (not rollback and to_version > db_version)
+			
 			tcoll = find_table_collision(cur)
-			if not tcoll:
+			if tcoll:
+				for coll in tcoll:
+					print "Collistion detected: table %s was altered after last schema update" % coll[0]
+
+			if tcoll and not skip:
+				print 'To migrate schema while collision detected, use option "skip"'
+			else:
 				if update_needed:
 					print 'Migrating database schema to version %i' % to_version
 					if rollback:
-						versions = range(to_version + 1, db_version + 1)
-						versions.reverse()
-						migrate_db(scripts, versions, cur, field='sqldown')
+						mig_scripts = refine_scripts(scripts[MIGR_DIR], to_version, db_version, skip)
+						field = 'sqldown'
 					else:
-						versions = range(db_version + 1, to_version + 1)
-						migrate_db(scripts, versions, cur)
+						mig_scripts = refine_scripts(scripts[MIGR_DIR], db_version, to_version, skip)
+						field = 'sqlup'
+					run_scripts(mig_scripts, field, cur)
 					print 'Updating schema_info table'
 					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
 					cur.execute(query)
 				else:
 					print 'Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version)
-			else:
-				for coll in tcoll:
-					print "Collistion detected: table %s was altered after last schema update" % coll[0]
 
 			rcoll = find_routine_collision(cur)
 			if not len(rcoll):
@@ -130,6 +134,20 @@ def migrate(servers, schema_dir, rollback=False, to_version=None):
 
 			con.commit()
 			con.close()
+
+def refine_scripts(scripts, version1, version2, skip):
+	"""
+	Чистит список скриптов, полученный из директории, оставляя в нем
+	только нужные миграции между указанными версиями, пропускает
+	версии из списка skip
+	"""
+	ret = [ ]
+	for script in scripts:
+		v = script['version']
+		if v >= version1 and v <= version2 and not v in skip:
+			ret.append(script)
+	return ret
+		
 
 def find_routine_collision(cursor):
 	"""
@@ -178,16 +196,24 @@ def update_routines(scripts, cursor):
 	query = 'update schema_info set last_update = getdate()'
 	cursor.execute(query)
 
-def migrate_db(scripts, versions, cursor, field='sqlup'):
-	"""
-	Основной код миграции: мигрирует схему из данной директории в одну базу. 
-	"""
+#~ def migrate_db(scripts, versions, cursor, field='sqlup'):
+	#~ """
+	#~ Основной код миграции: мигрирует схему из данной директории в одну базу. 
+	#~ """
 	
-	for script in scripts[MIGR_DIR]:
-		script_version = extract_version(script['script'])
-		if script_version in versions and field in script:
-			print '\trunnig %s from script %s' % (field, script['script'])
-			cursor.execute(script[field])
+	#~ for script in scripts[MIGR_DIR]:
+		#~ script_version = extract_version(script['script'])
+		#~ if script_version in versions and field in script:
+			#~ print '\trunnig %s from script %s' % (field, script['script'])
+			#~ cursor.execute(script[field])
+
+def run_scripts(scripts, field, cursor):
+	"""
+	Выполняет в базе код из поля field массива scripts
+	"""
+	for script in scripts:
+		print '\trunnig %s from script %s' % (field, script['script'])
+		cursor.execute(script[field])
 
 def extract_version(file):
 	"""
@@ -214,11 +240,6 @@ def get_scripts(dir, reverse=False):
 	}
 	"""
 	
-	def cmp(f1, f2):
-		n1 = extract_version(f1)
-		n2 = extract_version(f2)
-		return n1 - n2
-		
 	ret = { }
 	for type in listdir(dir):
 		ret[type] = [ ]
@@ -226,21 +247,25 @@ def get_scripts(dir, reverse=False):
 			file = open(dir + os.sep + type + os.sep + script)
 			sql = ''.join(file.readlines())
 			(sqlup, sqldown) = ('', '')
-			if type == MIGR_DIR:
-				sql_parts = sql.split(SQLUP_CUT)
-				sqlup = sql_parts[0]
-				if len(sql_parts) > 1:
-					sqldown = sql_parts[1]
 				
-			ret[type].append({
+			data = {
 				'script': script,
 				'sql': sql,
-				'sqlup': sqlup,
-				'sqldown': sqldown,
 				# для получения SQL-типа тупо обрезаем последнюю букву. It works for me
-				'type': type[:-1]
-			})
-			ret[type].sort(cmp, lambda elem: elem['script'], reverse)
+				'type': type[:-1],
+			}
+			
+			if type == MIGR_DIR:
+				data['version'] = extract_version(script)
+				sql_parts = sql.split(SQLUP_CUT)
+				data['sqlup'] = sql_parts[0]
+				if len(sql_parts) > 1:
+					data['sqldown'] = sql_parts[1]
+					
+			ret[type].append(data)
+			
+		if type == MIGR_DIR:
+			ret[type].sort(cmp, lambda elem: elem['version'], reverse)
 	return ret
 
 class WantArgs:
@@ -266,18 +291,40 @@ class WantArgs:
 			f(options, args, config)
 		return check
 
-@WantArgs(1)
+#~ @WantArgs(1)
 def action_migrate(options, args, config):
+	if len(args) < 1:
+		print 'Error: migrate requires minimum 1 argument'
+		return
 	schema_dir = args[0]
 	servers = config['servers']
-	migrate(servers, schema_dir)
+	skip = [ ]
+	try:
+		if len(args) > 1 and args[1] == 'skip':
+			skip = [int(a) for a in args[2:]]
+	except ValueError, e:
+		print 'Error: version number must be integer'
+		return
+		
+	migrate(servers, schema_dir, skip=skip)
 
-@WantArgs(2)
+#~ @WantArgs(2)
 def action_rollback(options, args, config):
+	if len(args) < 2:
+		print 'Error: rollback requires minimum 2 arguments'
+		return
 	schema_dir = args[0]
-	to_version = int(args[1])
+	skip = [ ]
+	try:
+		to_version = int(args[1])
+		if len(args) > 2 and args[2] == 'skip':
+			skip = [int(a) for a in args[3:]]
+	except ValueError, e:
+		print 'Error: version number must be integer'
+		return
+		
 	servers = config['servers']
-	migrate(servers, schema_dir, rollback=True, to_version=to_version)
+	migrate(servers, schema_dir, rollback=True, to_version=to_version, skip=skip)
 
 @WantArgs(1)
 def action_dump(options, args, config):
