@@ -9,14 +9,18 @@ FUNC_DIR = 'functions'
 MIGR_DIR = 'migration'
 SQLUP_CUT='-- SQLUP-CUT'
 
-def listdir(dir):
+def listdir(dir, ext=None):
 	"""
 	Замена стандартному os.listdir, пропускает файлы с именами начинающимися с '.'
+	если задан параметр ext, то возвращает файлы только с этим расширением
 	"""
 	ret = [ ]
 	for str in os.listdir(dir):
-		if not str.startswith('.'):
-			ret.append(str)
+		if str.startswith('.'):
+			continue
+		if ext and not str.endswith(ext):
+			continue
+		ret.append(str)
 	return ret
 
 def get_config(filename):
@@ -177,15 +181,14 @@ def migrate_db(scripts, versions, cursor, field='sqlup'):
 
 def extract_version(file):
 	"""
-	Выдирает все цифры из имени файла и склеивает их в INT
+	Выдирает начальные цифры из имени файла и склеивает их в INT
 	"""
 	
-	try:
-		version = int(re.sub(r'\D', '', file))
-	except ValueError:
+	n = re.compile('^(\d+).*').match(file)
+	if not n:
 		print "Error: incorrect file name: %s" % file
 		sys.exit(1)
-	return version
+	return int(n.groups()[0])
 
 def get_scripts(dir, reverse=False):
 	"""
@@ -209,7 +212,7 @@ def get_scripts(dir, reverse=False):
 	ret = { }
 	for type in listdir(dir):
 		ret[type] = [ ]
-		for script in listdir(dir + os.sep + type):
+		for script in listdir(dir + os.sep + type, '.sql'):
 			file = open(dir + os.sep + type + os.sep + script)
 			sql = ''.join(file.readlines())
 			(sqlup, sqldown) = ('', '')
