@@ -98,46 +98,56 @@ def migrate(servers, schema_dir, rollback=False, to_version=None):
 			con = pymssql.connect(**conf)
 			cur = con.cursor()
 			
-			find_collision(cur)
 			(db_version, last_update) = schema_info(cur)
 			print 'Schema info: version %i, last update %s' % (db_version, last_update.strftime('%Y-%m-%d %H:%M'))
-			if rollback:
-				if (to_version < db_version):
+			update_needed = (rollback and to_version < db_version) or (not rollback and to_version > db_version)
+			tcoll = find_table_collision(cur)
+			if not tcoll:
+				if update_needed:
 					print 'Migrating database schema to version %i' % to_version
-					versions = range(to_version + 1, db_version + 1)
-					versions.reverse()
-					migrate_db(scripts, versions, cur, field='sqldown')
+					if rollback:
+						versions = range(to_version + 1, db_version + 1)
+						versions.reverse()
+						migrate_db(scripts, versions, cur, field='sqldown')
+					else:
+						versions = range(db_version + 1, to_version + 1)
+						migrate_db(scripts, versions, cur)
 					print 'Updating schema_info table'
 					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
 					cur.execute(query)
 				else:
-					print 'Database schema version %i, no need to rollback schema' % db_version
+					print 'Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version)
 			else:
-				if (to_version > db_version):
-					print 'Migrating database schema to version %i' % to_version
-					versions = range(db_version + 1, to_version + 1)
-					migrate_db(scripts, versions, cur)
-					print 'Updating schema_info table'
-					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
-					cur.execute(query)
-				else:
-					print 'Migration scripts version %i, no need to update schema' % to_version
+				for coll in tcoll:
+					print "Collistion detected: table %s was altered after last schema update" % coll[0]
 
-			update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
-			
+			rcoll = find_routine_collision(cur)
+			if not len(rcoll):
+				update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
+			else:
+				for coll in rcoll:
+					print "Collistion detected: stored procedure %s was altered after last schema update" % coll[0]
+
 			con.commit()
 			con.close()
 
-def find_collision(cursor):
+def find_routine_collision(cursor):
 	"""
-	Ищет, типа, коллизии
+	Возвращает список процедур и функций с временем изменения большим, 
+	чем schema_info.last_update
 	"""
 	query = 'select specific_name, last_altered from INFORMATION_SCHEMA.ROUTINES t, schema_info s where t.last_altered > s.last_update'
 	cursor.execute(query)
-	if cursor.rowcount > 0:
-		for data in cursor.fetchall():
-			print "Collistion detected: stored procedure %s was altered after last schema update" % data[0]
-		sys.exit(1)
+	return cursor.fetchall()
+
+def find_table_collision(cursor):
+	"""
+	Возвращает список таблиц с временем изменения большим, 
+	чем schema_info.last_update
+	"""
+	query = 'select name, modify_date from sys.tables t, schema_info s where t.modify_date > s.last_update'
+	cursor.execute(query)
+	return cursor.fetchall()
 
 def schema_info(cursor):
 	"""
