@@ -306,9 +306,9 @@ def main():
 	"""
 	
 	parser = OptionParser(
-		usage="usage: %prog [-c CONFIG] [-d DATABASE] action schema_directory\npossible actions: migrate, rollback, dump, doc",
+		usage="usage: %prog [OPTIONS] action schema_directory\npossible actions: migrate, rollback, dump, doc",
 		version=__version__)
-	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use. Default is "%default"')
+	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use, default is "%default"')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
 	(options, args) = parser.parse_args()
 	config = get_config(options.config)
