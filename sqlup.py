@@ -58,7 +58,7 @@ def dump_routines(cur, type):
 	Выбирает из information_schema.routines объекты указанного типа, возвращает массивом
 	"""
 	ret = []
-	query = 'SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES where routine_type = %s'
+	query = "SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES where routine_body = 'SQL' AND routine_type = %s"
 	cur.execute(query, (type,))
 	for proc in cur.fetchall():
 		ret.append({
