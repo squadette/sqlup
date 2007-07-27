@@ -56,6 +56,7 @@ def get_config(filename):
 def dump_routines(cur, type):
 	"""
 	Выбирает из information_schema.routines объекты указанного типа, возвращает массивом
+	(выбираются только объекты с routine_body = 'SQL')
 	"""
 	ret = []
 	query = "SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES where routine_body = 'SQL' AND routine_type = %s"
@@ -291,7 +292,6 @@ class WantArgs:
 			f(options, args, config)
 		return check
 
-#~ @WantArgs(1)
 def action_migrate(options, args, config):
 	if len(args) < 1:
 		print 'Error: migrate requires minimum 1 argument'
@@ -308,7 +308,6 @@ def action_migrate(options, args, config):
 		
 	migrate(servers, schema_dir, skip=skip)
 
-#~ @WantArgs(2)
 def action_rollback(options, args, config):
 	if len(args) < 2:
 		print 'Error: rollback requires minimum 2 arguments'
