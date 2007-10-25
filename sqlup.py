@@ -2,6 +2,8 @@
 __version__ = "$Id$"
 
 import sys, os, re, pymssql, ConfigParser
+from pymssql import DatabaseError
+from datetime import datetime
 from optparse import OptionParser
 
 PROC_DIR = 'procedures'
@@ -15,12 +17,13 @@ def listdir(dir, ext=None):
 	если задан параметр ext, то возвращает файлы только с этим расширением
 	"""
 	ret = [ ]
-	for str in os.listdir(dir):
-		if str.startswith('.'):
-			continue
-		if ext and not str.endswith(ext):
-			continue
-		ret.append(str)
+	if os.path.isdir(dir):
+		for str in os.listdir(dir):
+			if str.startswith('.'):
+				continue
+			if ext and not str.endswith(ext):
+				continue
+			ret.append(str)
 	return ret
 
 def get_config(filename):
@@ -92,7 +95,8 @@ def migrate(servers, schema_dir, rollback=False, to_version=None, skip=[]):
 				scripts = get_scripts(db_dir, reverse=True)
 			else:
 				scripts = get_scripts(db_dir)
-				to_version = extract_version(scripts[MIGR_DIR][-1]['script'])
+				if len(scripts['migration']):
+					to_version = extract_version(scripts[MIGR_DIR][-1]['script'])
 			
 			conf = servers[server]
 			conf['database'] = db
@@ -124,7 +128,10 @@ def migrate(servers, schema_dir, rollback=False, to_version=None, skip=[]):
 					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
 					cur.execute(query)
 				else:
-					print 'Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version)
+					if to_version is None:
+						print 'No migration scripts provided'
+					else:
+						print 'Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version)
 
 			rcoll = find_routine_collision(cur)
 			if not len(rcoll):
@@ -173,9 +180,20 @@ def schema_info(cursor):
 	Возвращает список (версия, время_последнего апдейта) для текущей БД
 	"""
 	
+	(db_version, last_update) = (-1, datetime.fromtimestamp(0))
+	
 	query = 'select * from schema_info'
-	cursor.execute(query)
-	(db_version, last_update) = cursor.fetchone()
+	try:
+		cursor.execute(query)
+		if cursor.rowcount:
+			(db_version, last_update) = cursor.fetchone()
+		else:
+			query = 'insert into schema_info(schema_version, last_update) values(-1, getdate())'
+			cursor.execute(query)
+	except DatabaseError, e:
+		print "Error occured while reading schema_info table: %s" % e
+		sys.exit(1)
+		
 	return (db_version, last_update)
 
 def update_routines(scripts, cursor):
@@ -267,6 +285,7 @@ def get_scripts(dir, reverse=False):
 			
 		if type == MIGR_DIR:
 			ret[type].sort(cmp, lambda elem: elem['version'], reverse)
+
 	return ret
 
 class WantArgs:
