@@ -349,7 +349,11 @@ def action_dump(options, args, config):
 	if not options.database in config['servers']:
 		print "Error: no database %s in config file" % options.database
 		return
-	con = pymssql.connect(database=options.database, **config['servers'][options.database])
+	
+	section = options.database
+	db = section.split('.')[1]
+	
+	con = pymssql.connect(database=db, **config['servers'][options.database])
 	cur = con.cursor()
 	
 	#~ TODO: какое-то тупое дублирование кода, подумать
