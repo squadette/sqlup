@@ -98,7 +98,7 @@ def migrate(servers, schema_dir, rollback=False, to_version=None, skip=[]):
 				if len(scripts['migration']):
 					to_version = extract_version(scripts[MIGR_DIR][-1]['script'])
 			
-			conf = servers[server]
+			conf = servers[server + '.' + db]
 			conf['database'] = db
 			con = pymssql.connect(**conf)
 			cur = con.cursor()
