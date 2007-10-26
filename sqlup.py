@@ -65,9 +65,11 @@ def dump_routines(cur, type):
 	query = "SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES where routine_body = 'SQL' AND routine_type = %s"
 	cur.execute(query, (type,))
 	for proc in cur.fetchall():
+		regex = re.compile(r'create (proc|procedure|function) ', re.I)
+		definition = regex.sub(r'ALTER \1 ', proc[1])
 		ret.append({
 			'name': proc[0],
-			'definition': proc[1],
+			'definition': definition,
 			'last_altered': proc[2],
 		})
 	return ret
