@@ -6,6 +6,7 @@ from pymssql import DatabaseError
 from datetime import datetime
 from optparse import OptionParser
 
+
 PROC_DIR = 'procedures'
 FUNC_DIR = 'functions'
 MIGR_DIR = 'migration'
@@ -61,8 +62,18 @@ def dump_routines(cur, type):
 	Выбирает из information_schema.routines объекты указанного типа, возвращает массивом
 	(выбираются только объекты с routine_body = 'SQL')
 	"""
+	
 	ret = []
-	query = "SELECT specific_name, CAST(routine_definition AS text), last_altered FROM INFORMATION_SCHEMA.ROUTINES where routine_body = 'SQL' AND routine_type = %s"
+	cur.execute('SET TEXTSIZE 2147483647')
+	query = """
+		SELECT specific_name, CAST(routine_definition AS TEXT), last_altered
+		FROM INFORMATION_SCHEMA.ROUTINES
+		WHERE routine_body = 'SQL' 
+			AND specific_schema = 'dbo' 
+			AND routine_type = %s 
+			AND specific_name NOT LIKE 'dt_%%' 
+			AND specific_name NOT LIKE 'sp_%%'"""
+	print query
 	cur.execute(query, (type,))
 	for proc in cur.fetchall():
 		regex = re.compile(r'create (proc|procedure|function) ', re.I)
@@ -84,7 +95,7 @@ def save_routine(dir, proc):
 	f.write(proc['definition'])
 	f.close()
 
-def migrate(servers, schema_dir, rollback=False, to_version=None, skip=[]):
+def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, skip=[]):
 	"""
 	Выполняет миграцию схемы из данной директории на сервера из списка
 	"""
@@ -113,6 +124,12 @@ def migrate(servers, schema_dir, rollback=False, to_version=None, skip=[]):
 			if tcoll:
 				for coll in tcoll:
 					print "Collistion detected: table %s was altered after last schema update" % coll[0]
+				if not ignore:
+					print "Use --ignore options to ignore collisions"
+			
+			if ignore:
+				print "Ignoring collisions"
+				tcoll = [ ]
 
 			if tcoll and not skip:
 				print 'To migrate schema while collision detected, use option "skip"'
@@ -136,11 +153,18 @@ def migrate(servers, schema_dir, rollback=False, to_version=None, skip=[]):
 						print 'Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version)
 
 			rcoll = find_routine_collision(cur)
-			if not len(rcoll):
-				update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
-			else:
+			if rcoll:
 				for coll in rcoll:
 					print "Collistion detected: stored procedure %s was altered after last schema update" % coll[0]
+				if not ignore:
+					print "Use --ignore options to ignore collisions"
+
+			if ignore:
+				print "Ignoring collisions"
+				rcoll = [ ]
+			
+			if not rcoll:
+				update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
 
 			con.commit()
 			con.close()
@@ -192,6 +216,7 @@ def schema_info(cursor):
 		else:
 			query = 'insert into schema_info(schema_version, last_update) values(-1, getdate())'
 			cursor.execute(query)
+			
 	except DatabaseError, e:
 		print "Error occured while reading schema_info table: %s" % e
 		sys.exit(1)
@@ -208,11 +233,9 @@ def update_routines(scripts, cursor):
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
-			print '\tdropping routine %s' % proc_name
-			query = 'drop %s %s' % (script['type'], proc_name)
-			cursor.execute(query)
-		print '\tcreating routine %s' % proc_name
-		cursor.execute(script['sql'])
+			print '\taltering routine %s' % proc_name
+			print script['sql']
+			cursor.execute(script['sql'])
 	print 'Updating schema_info.last_update'
 	query = 'update schema_info set last_update = getdate()'
 	cursor.execute(query)
@@ -327,7 +350,7 @@ def action_migrate(options, args, config):
 		print 'Error: version number must be integer'
 		return
 		
-	migrate(servers, schema_dir, skip=skip)
+	migrate(servers, schema_dir, ignore=options.ignore, skip=skip)
 
 def action_rollback(options, args, config):
 	if len(args) < 2:
@@ -391,7 +414,9 @@ def main():
 		version=__version__)
 	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use, default is "%default"')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
+	parser.add_option('-i', '--ignore-collision', dest='ignore', default=False, help='ignore database collisions')
 	(options, args) = parser.parse_args()
+	options.ignore = bool(options.ignore)
 	config = get_config(options.config)
 
 	actions = {
