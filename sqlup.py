@@ -93,6 +93,8 @@ def get_routine_definition(cur, name):
 		) ORDER BY c.colid"""
 	cur.execute(query, (name,))
 	definition = ''.join([row[0] for row in cur.fetchall()])
+	definition = '\n'.join(definition.splitlines())
+	
 	print name, len(definition)
 	return definition
 
@@ -425,7 +427,7 @@ def main():
 		version=__version__)
 	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use, default is "%default"')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
-	parser.add_option('-i', '--ignore-collision', dest='ignore', default=False, help='ignore database collisions')
+	parser.add_option('-i', '--ignore-collision', action='store_false', dest='ignore', default=False, help='ignore database collisions')
 	(options, args) = parser.parse_args()
 	options.ignore = bool(options.ignore)
 	config = get_config(options.config)
