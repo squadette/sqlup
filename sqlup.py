@@ -64,26 +64,37 @@ def dump_routines(cur, type):
 	"""
 	
 	ret = []
-	cur.execute('SET TEXTSIZE 2147483647')
 	query = """
-		SELECT specific_name, CAST(routine_definition AS TEXT), last_altered
+		SELECT specific_name, last_altered
 		FROM INFORMATION_SCHEMA.ROUTINES
 		WHERE routine_body = 'SQL' 
 			AND specific_schema = 'dbo' 
 			AND routine_type = %s 
 			AND specific_name NOT LIKE 'dt_%%' 
 			AND specific_name NOT LIKE 'sp_%%'"""
-	print query
+	#print query
 	cur.execute(query, (type,))
 	for proc in cur.fetchall():
 		regex = re.compile(r'create (proc|procedure|function) ', re.I)
-		definition = regex.sub(r'ALTER \1 ', proc[1])
+		definition = regex.sub(r'ALTER \1 ', get_routine_definition(cur, proc[0]))
 		ret.append({
 			'name': proc[0],
 			'definition': definition,
-			'last_altered': proc[2],
+			'last_altered': proc[1],
 		})
 	return ret
+
+def get_routine_definition(cur, name):
+	definition = ""
+	cur.execute('set textsize 1000000')
+	query = """SELECT CAST(c.text AS TEXT) FROM syscomments c WHERE c.id = (
+			SELECT object_id FROM sys.all_objects
+			WHERE name = %s
+		) ORDER BY c.colid"""
+	cur.execute(query, (name,))
+	definition = ''.join([row[0] for row in cur.fetchall()])
+	print name, len(definition)
+	return definition
 
 def save_routine(dir, proc):
 	"""
