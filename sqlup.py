@@ -270,7 +270,9 @@ def run_scripts(scripts, field, cursor):
 	"""
 	for script in scripts:
 		print '\trunnig %s from script %s' % (field, script['script'])
+		cursor.execute('BEGIN TRAN')
 		cursor.execute(script[field])
+		cursor.execute('COMMIT')
 
 def extract_version(file):
 	"""
