@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 __version__ = "$Id$"
 
 import sys, os, re, pymssql, ConfigParser
@@ -351,11 +351,33 @@ class WantArgs:
 			f(options, args, config)
 		return check
 
+def validate_schema_dir(config, dir):
+	valid = True
+	for server, db in [s.split('.') for s in config['servers']]:
+		server_dir = os.path.join(dir, server)
+		if not os.path.isdir(server_dir):
+			valid = False
+			print 'Error: directory for server "%s" (listed in config file) not found in schema directory %s' % (server, dir)
+		db_dir = os.path.join(server_dir, db)
+		if not os.path.isdir(db_dir):
+			valid = False
+			print 'Error: directory for db "%s" (listed in config file) not found in server directory %s' % (db, server_dir)
+		for d in (PROC_DIR, FUNC_DIR, MIGR_DIR):
+			subdir = os.path.join(db_dir, d)
+			if not os.path.isdir(subdir):
+				valid = False
+				print 'Error: necessary directory "%s" not found in db directory %s' % (db_dir, subdir)
+	return valid
+
+
 def action_migrate(options, args, config):
 	if len(args) < 1:
 		print 'Error: migrate requires minimum 1 argument'
 		return
 	schema_dir = args[0]
+	if not validate_schema_dir(config, schema_dir):
+		print 'Error: invalid schema directory structure'
+		return
 	servers = config['servers']
 	skip = [ ]
 	try:
