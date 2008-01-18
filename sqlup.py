@@ -153,7 +153,7 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 						mig_scripts = refine_scripts(scripts[MIGR_DIR], to_version, db_version, skip)
 						field = 'sqldown'
 					else:
-						mig_scripts = refine_scripts(scripts[MIGR_DIR], db_version, to_version, skip)
+						mig_scripts = refine_scripts(scripts[MIGR_DIR], db_version + 1, to_version, skip)
 						field = 'sqlup'
 					run_scripts(mig_scripts, field, cur)
 					print 'Updating schema_info table'
