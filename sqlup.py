@@ -247,7 +247,7 @@ def update_routines(scripts, cursor):
 		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
 			print '\taltering routine %s' % proc_name
-			print script['sql']
+			#print script['sql']
 			cursor.execute(script['sql'])
 	print 'Updating schema_info.last_update'
 	query = 'update schema_info set last_update = getdate()'
