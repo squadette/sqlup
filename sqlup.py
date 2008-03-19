@@ -35,7 +35,7 @@ def get_config(filename):
 		cnfFile = open(filename)
 	except IOError:
 		print "Error: cannot open config file %s" % filename
-		sys.exit(1)
+		return False
 
 	servers = { }
 	cnf = ConfigParser.ConfigParser()
@@ -461,7 +461,7 @@ def main():
 		'dump': action_dump,
 		'doc': action_doc,
 	}
-	if len(args) == 0 or not args[0] in actions:
+	if not config or len(args) == 0 or not args[0] in actions:
 		parser.print_help()
 		sys.exit()
 	actions[args[0]](options, args[1:], config)
