@@ -130,23 +130,15 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 			cur = con.cursor()
 			
 			(db_version, last_update) = schema_info(cur)
-			print 'Schema info: version %i, last update %s' % (db_version, last_update.strftime('%Y-%m-%d %H:%M'))
+			print 'Database schema info: version %i, last update %s' % (db_version, last_update.strftime('%Y-%m-%d %H:%M'))
 			update_needed = (rollback and to_version < db_version) or (not rollback and to_version > db_version)
 			
 			tcoll = find_table_collision(cur)
-			if tcoll:
-				for coll in tcoll:
-					print "Collistion detected: table %s was altered after last schema update" % coll[0]
-				if not ignore:
-					print "Use --ignore options to ignore collisions"
-			
+			rcoll = find_routine_collision(cur)
 			if ignore:
 				print "Ignoring collisions"
-				tcoll = [ ]
 
-			if tcoll and not skip:
-				print 'To migrate schema while collision detected, use option "skip"'
-			else:
+			if ignore or skip or not (tcoll or rcoll):
 				if update_needed:
 					print 'Migrating database schema to version %i' % to_version
 					if rollback:
@@ -165,19 +157,17 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 					else:
 						print 'Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version)
 
-			rcoll = find_routine_collision(cur)
-			if rcoll:
-				for coll in rcoll:
-					print "Collistion detected: stored procedure %s was altered after last schema update" % coll[0]
-				if not ignore:
-					print "Use --ignore options to ignore collisions"
-
-			if ignore:
-				print "Ignoring collisions"
-				rcoll = [ ]
-			
-			if not rcoll:
+			if ignore or not rcoll:
 				update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
+
+			if rcoll or tcoll:
+				print "Collision(s) detected:\n"
+				for coll in tcoll:
+					print "\ttable %s is altered at %s" % coll
+				for coll in rcoll:
+					print "\troutine %s is altered at %s" % coll
+				if not ignore or not skip:
+					print '\nTo migrate schema while collision detected, use options "--ignore" or "skip"'
 
 			con.commit()
 			con.close()
@@ -252,17 +242,6 @@ def update_routines(scripts, cursor):
 	print 'Updating schema_info.last_update'
 	query = 'update schema_info set last_update = getdate()'
 	cursor.execute(query)
-
-#~ def migrate_db(scripts, versions, cursor, field='sqlup'):
-	#~ """
-	#~ Основной код миграции: мигрирует схему из данной директории в одну базу. 
-	#~ """
-	
-	#~ for script in scripts[MIGR_DIR]:
-		#~ script_version = extract_version(script['script'])
-		#~ if script_version in versions and field in script:
-			#~ print '\trunnig %s from script %s' % (field, script['script'])
-			#~ cursor.execute(script[field])
 
 def run_scripts(scripts, field, cursor):
 	"""
@@ -447,7 +426,7 @@ def main():
 	"""
 	
 	parser = OptionParser(
-		usage="usage: %prog [OPTIONS] action schema_directory\npossible actions: migrate, rollback, dump, doc",
+		usage="usage: %prog [OPTIONS] action [schema_directory]\npossible actions: migrate, rollback, dump, doc",
 		version=__version__)
 	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use, default is "%default"')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
