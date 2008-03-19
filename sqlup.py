@@ -34,7 +34,6 @@ def get_config(filename):
 	try:
 		cnfFile = open(filename)
 	except IOError:
-		print "Error: cannot open config file %s" % filename
 		return False
 
 	servers = { }
@@ -307,28 +306,6 @@ def get_scripts(dir, reverse=False):
 
 	return ret
 
-class WantArgs:
-	"""
-	<СложнаяШтука>
-	
-	Это сделано, чтобы не проверять по отдельности в каждом action'е,
-	сколько ему пришло параметров. Экземпляр класса - это callable-выражение,
-	при вызове возвращающее функцию-декоратор, которая знает, сколько элементов
-	в массиве args должно придти декорируемой фунции.
-	
-	</СложнаяШтука>
-	"""
-	
-	def __init__(self, n):
-		self.n = n
-	
-	def __call__(self, f):
-		def check(options, args, config):
-			if len(args) != self.n:
-				print 'Error: this action requires %i argument(s)' % self.n
-				return
-			f(options, args, config)
-		return check
 
 def validate_schema_dir(config, dir):
 	valid = True
@@ -351,7 +328,7 @@ def validate_schema_dir(config, dir):
 
 def action_migrate(options, args, config):
 	if len(args) < 1:
-		print 'Error: migrate requires minimum 1 argument'
+		print 'Error: migrate requires minimum 1 argument - schema directory'
 		return
 	schema_dir = args[0]
 	if not validate_schema_dir(config, schema_dir):
@@ -370,7 +347,7 @@ def action_migrate(options, args, config):
 
 def action_rollback(options, args, config):
 	if len(args) < 2:
-		print 'Error: rollback requires minimum 2 arguments'
+		print 'Error: rollback requires minimum 2 arguments - schema directory and migration number'
 		return
 	schema_dir = args[0]
 	skip = [ ]
@@ -385,10 +362,16 @@ def action_rollback(options, args, config):
 	servers = config['servers']
 	migrate(servers, schema_dir, rollback=True, to_version=to_version, skip=skip)
 
-@WantArgs(1)
+
 def action_dump(options, args, config):
 	if not options.database in config['servers']:
+		print "Error: no database specified. Try 'sqlup.py --help' for options list."
+		return
+	if not options.database in config['servers']:
 		print "Error: no database %s in config file" % options.database
+		return
+	if len(args) == 0:
+		print "Error: please, specify destination directory" % options.database
 		return
 	
 	section = options.database
@@ -415,24 +398,34 @@ def action_dump(options, args, config):
 
 	con.close()
 
-@WantArgs(0)
+
 def action_doc(options, args, config):
 	print help('sqlup')
 
+
+def startup_error(str):
+	sys.stderr.write("\nError: %s. Try 'sqlup.py --help' for more info.\n" % str)
+	sys.exit()
+	
 def main():
 	"""
 	Разбирает параметры командной строки, читает конфиг и вызывает функцию action_ACTION,
 	где ACTION - первый позиционный параметр
 	"""
-	
-	parser = OptionParser(
-		usage="usage: %prog [OPTIONS] action [schema_directory]\npossible actions: migrate, rollback, dump, doc",
-		version=__version__)
-	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use, default is "%default"')
+
+	usage = """%prog [OPTIONS] action [schema_directory]
+Possible actions: migrate, rollback, dump, doc
+Samples:
+\t%prog -c sqlup.conf migrate c:/myproject/schema_dir
+\t%prog -i migrate c:/myproject/schema_dir (ignoring collisions and using config file from current directory)
+\t%prog -c sqlup.conf -d server1.my_db ./dump_dir"""
+	parser = OptionParser(usage=usage, version=__version__)
+	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use, default is %default in current directory')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
 	parser.add_option('-i', '--ignore-collision', action='store_true', dest='ignore', default=False, help='ignore database collisions')
 	(options, args) = parser.parse_args()
 	config = get_config(options.config)
+	error = False
 
 	actions = {
 		'migrate': action_migrate,
@@ -440,9 +433,19 @@ def main():
 		'dump': action_dump,
 		'doc': action_doc,
 	}
+
 	if not config or len(args) == 0 or not args[0] in actions:
-		parser.print_help()
-		sys.exit()
+		error = True
+
+	if error:
+		if not config:
+			startup_error("cannot open config file %s" % options.config)
+		if len(args) == 0:
+			startup_error("no action specified")
+		elif not args[0] in actions:
+			startup_error("\"%s\" is not a valid action" % args[0])
+
+
 	actions[args[0]](options, args[1:], config)
 
 if __name__ == '__main__':
