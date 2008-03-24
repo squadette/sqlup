@@ -1,16 +1,32 @@
 # -*- coding: utf-8 -*-
 __version__ = "$Id$"
 
-import sys, os, re, pymssql, ConfigParser
+import sys, os, re, traceback, pymssql, ConfigParser
 from pymssql import DatabaseError
 from datetime import datetime
 from optparse import OptionParser
+from cStringIO import StringIO
+import logging as log
 
+LOGFORMAT = '%(message)s'
 
 PROC_DIR = 'procedures'
 FUNC_DIR = 'functions'
 MIGR_DIR = 'migration'
 SQLUP_CUT='-- SQLUP-CUT'
+
+
+def print_exception():
+	if log.getLevelName(log.getLogger().level) == 'DEBUG':
+		out = StringIO()
+		traceback.print_exception(sys.exc_type, sys.exc_value, sys.exc_traceback, None, out)
+		ret = out.getvalue()
+		out.close()
+		log.debug(ret)
+	else:
+		log.error('%s: %s\n\t(use --verbose option to see full stacktrace)\n' % (sys.exc_type.__name__, sys.exc_value))
+
+
 
 def listdir(dir, ext=None):
 	"""
@@ -47,7 +63,7 @@ def get_config(filename):
 				'password': cnf.get(section, 'password'),
 			}
 	except ConfigParser.NoOptionError, e:
-		print "Config file error: %s" % e
+		log.error("Config file error: %s" % e)
 		sys.exit(1)
 
 	ret = {
@@ -71,7 +87,6 @@ def dump_routines(cur, type):
 			AND routine_type = %s 
 			AND specific_name NOT LIKE 'dt_%%' 
 			AND specific_name NOT LIKE 'sp_%%'"""
-	#print query
 	cur.execute(query, (type,))
 	for proc in cur.fetchall():
 		regex = re.compile(r'create (proc|procedure|function) ', re.I)
@@ -94,7 +109,7 @@ def get_routine_definition(cur, name):
 	definition = ''.join([row[0] for row in cur.fetchall()])
 	definition = '\n'.join(definition.splitlines())
 	
-	print name, len(definition)
+	log.debug('%s loaded' % name)
 	return definition
 
 def save_routine(dir, proc):
@@ -102,7 +117,7 @@ def save_routine(dir, proc):
 	Сохраняет код процедуры или функции в файле в указанной директории
 	"""
 	fname = dir + os.sep + proc['name'] + '.sql'
-	print 'writing %s' % fname
+	log.info('writing %s' % fname)
 	f = open(fname, 'w')
 	f.write(proc['definition'])
 	f.close()
@@ -112,7 +127,7 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 	Выполняет миграцию схемы из данной директории на сервера из списка
 	"""
 	
-	print 'migrating...'
+	log.info('migrating...')
 	for server in listdir(schema_dir):
 		for db in listdir(schema_dir + os.sep + server):
 			db_dir = schema_dir + os.sep + server + os.sep + db
@@ -129,17 +144,18 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 			cur = con.cursor()
 			
 			(db_version, last_update) = schema_info(cur)
-			print 'Database schema info: version %i, last update %s' % (db_version, last_update.strftime('%Y-%m-%d %H:%M'))
+			log.info('Database schema info: version %i, last update %s' %
+				 (db_version, last_update.strftime('%Y-%m-%d %H:%M')))
 			update_needed = (rollback and to_version < db_version) or (not rollback and to_version > db_version)
 			
 			tcoll = find_table_collision(cur)
 			rcoll = find_routine_collision(cur)
 			if ignore:
-				print "Ignoring collisions"
+				log.info("Ignoring collisions")
 
 			if ignore or skip or not (tcoll or rcoll):
 				if update_needed:
-					print 'Migrating database schema to version %i' % to_version
+					log.info('Migrating database schema to version %i' % to_version)
 					if rollback:
 						mig_scripts = refine_scripts(scripts[MIGR_DIR], to_version, db_version, skip)
 						field = 'sqldown'
@@ -147,26 +163,28 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 						mig_scripts = refine_scripts(scripts[MIGR_DIR], db_version + 1, to_version, skip)
 						field = 'sqlup'
 					run_scripts(mig_scripts, field, cur)
-					print 'Updating schema_info table'
+					log.info('Updating schema_info table')
 					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
 					cur.execute(query)
 				else:
 					if to_version is None:
-						print 'No migration scripts provided'
+						log.warning('No migration scripts provided')
 					else:
-						print 'Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version)
+						log.info('Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version))
 
 			if ignore or not rcoll:
 				update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
 
 			if rcoll or tcoll:
-				print "Collision(s) detected:\n"
+				message = 'Collision(s) detected:\n'
 				for coll in tcoll:
-					print "\ttable %s is altered at %s" % coll
+					message += "\ttable %s is altered at %s\n" % coll
 				for coll in rcoll:
-					print "\troutine %s is altered at %s" % coll
+					message += "\troutine %s is altered at %s\n" % coll
+				log.warning(message)
+				
 				if not ignore or not skip:
-					print '\nTo migrate schema while collision detected, use options "--ignore" or "skip"'
+					log.info('\nTo migrate schema while collision detected, use options "--ignore" or "skip"')
 
 			con.commit()
 			con.close()
@@ -220,7 +238,7 @@ def schema_info(cursor):
 			cursor.execute(query)
 			
 	except DatabaseError, e:
-		print "Error occured while reading schema_info table: %s" % e
+		log.error("Error occured while reading schema_info table: %s" % e)
 		sys.exit(1)
 		
 	return (db_version, last_update)
@@ -229,16 +247,16 @@ def update_routines(scripts, cursor):
 	"""
 	Обновляет хранимые процедуры и функции в текущей БД
 	"""
-	print 'Updating routines:'
+	message = 'Updating routines:\n'
 	for script in scripts:
 		proc_name = os.path.splitext(script['script'])[0]
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
-			print '\taltering routine %s' % proc_name
-			#print script['sql']
+			message += '\taltering routine %s\n' % proc_name
 			cursor.execute(script['sql'])
-	print 'Updating schema_info.last_update'
+	log.info(message)
+	log.info('Updating schema_info.last_update')
 	query = 'update schema_info set last_update = getdate()'
 	cursor.execute(query)
 
@@ -247,7 +265,7 @@ def run_scripts(scripts, field, cursor):
 	Выполняет в базе код из поля field массива scripts
 	"""
 	for script in scripts:
-		print '\trunnig %s from script %s' % (field, script['script'])
+		log.info('\trunnig %s from script %s' % (field, script['script']))
 		cursor.execute('BEGIN TRAN')
 		cursor.execute(script[field])
 		cursor.execute('COMMIT')
@@ -259,7 +277,7 @@ def extract_version(file):
 	
 	n = re.compile('^(\d+).*').match(file)
 	if not n:
-		print "Error: incorrect file name: %s" % file
+		log.error("Error: incorrect file name: %s" % file)
 		sys.exit(1)
 	return int(n.groups()[0])
 
@@ -313,26 +331,26 @@ def validate_schema_dir(config, dir):
 		server_dir = os.path.join(dir, server)
 		if not os.path.isdir(server_dir):
 			valid = False
-			print 'Error: directory for server "%s" (listed in config file) not found in schema directory %s' % (server, dir)
+			log.error('Error: directory for server "%s" (listed in config file) not found in schema directory %s' % (server, dir))
 		db_dir = os.path.join(server_dir, db)
 		if not os.path.isdir(db_dir):
 			valid = False
-			print 'Error: directory for db "%s" (listed in config file) not found in server directory %s' % (db, server_dir)
+			log.error('Error: directory for db "%s" (listed in config file) not found in server directory %s' % (db, server_dir))
 		for d in (PROC_DIR, FUNC_DIR, MIGR_DIR):
 			subdir = os.path.join(db_dir, d)
 			if not os.path.isdir(subdir):
 				valid = False
-				print 'Error: necessary directory "%s" not found in db directory %s' % (db_dir, subdir)
+				log.error('Error: necessary directory "%s" not found in db directory %s' % (db_dir, subdir))
 	return valid
 
 
 def action_migrate(options, args, config):
 	if len(args) < 1:
-		print 'Error: migrate requires minimum 1 argument - schema directory'
+		log.error('Error: migrate requires minimum 1 argument - schema directory')
 		return
 	schema_dir = args[0]
 	if not validate_schema_dir(config, schema_dir):
-		print 'Error: invalid schema directory structure'
+		log.error('Error: invalid schema directory structure')
 		return
 	servers = config['servers']
 	skip = [ ]
@@ -340,14 +358,15 @@ def action_migrate(options, args, config):
 		if len(args) > 1 and args[1] == 'skip':
 			skip = [int(a) for a in args[2:]]
 	except ValueError, e:
-		print 'Error: version number must be integer'
+		log.error('Error: version number must be integer')
 		return
 		
 	migrate(servers, schema_dir, ignore=options.ignore, skip=skip)
 
+
 def action_rollback(options, args, config):
 	if len(args) < 2:
-		print 'Error: rollback requires minimum 2 arguments - schema directory and migration number'
+		log.error('Error: rollback requires minimum 2 arguments - schema directory and migration number')
 		return
 	schema_dir = args[0]
 	skip = [ ]
@@ -356,7 +375,7 @@ def action_rollback(options, args, config):
 		if len(args) > 2 and args[2] == 'skip':
 			skip = [int(a) for a in args[3:]]
 	except ValueError, e:
-		print 'Error: version number must be integer'
+		log.error('Error: version number must be integer')
 		return
 		
 	servers = config['servers']
@@ -365,13 +384,13 @@ def action_rollback(options, args, config):
 
 def action_dump(options, args, config):
 	if not options.database in config['servers']:
-		print "Error: no database specified. Try 'sqlup.py --help' for options list."
+		log.error("Error: no database specified. Try 'sqlup.py --help' for options list.")
 		return
 	if not options.database in config['servers']:
-		print "Error: no database %s in config file" % options.database
+		log.error("Error: no database %s in config file" % options.database)
 		return
 	if len(args) == 0:
-		print "Error: please, specify destination directory" % options.database
+		log.error("Error: please, specify destination directory" % options.database)
 		return
 	
 	section = options.database
@@ -404,9 +423,10 @@ def action_doc(options, args, config):
 
 
 def startup_error(str):
-	sys.stderr.write("\nError: %s. Try 'sqlup.py --help' for more info.\n" % str)
+	log.error("Startup error: %s. Try --verbose option for more info or --help for options list." % str)
 	sys.exit()
 	
+
 def main():
 	"""
 	Разбирает параметры командной строки, читает конфиг и вызывает функцию action_ACTION,
@@ -423,7 +443,14 @@ Samples:
 	parser.add_option('-c', '--conf', dest='config', default='sqlup.conf', help='config file to use, default is %default in current directory')
 	parser.add_option('-d', '--database', dest='database', help='database name, used with action "dump"')
 	parser.add_option('-i', '--ignore-collision', action='store_true', dest='ignore', default=False, help='ignore database collisions')
+	parser.add_option('-v', '--verbose', action='store_true', dest='verbose', default=False, help='verbose mode')
 	(options, args) = parser.parse_args()
+	level = log.INFO
+	if options.verbose:
+		level=log.DEBUG
+	log.basicConfig(format=LOGFORMAT, level=level, stream=sys.stdout)
+
+	log.debug('Loading configuration from file %s ...' % options.config)
 	config = get_config(options.config)
 	error = False
 
