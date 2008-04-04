@@ -341,13 +341,11 @@ def update_routines(scripts, cursor):
 	log.info('Updating routines...')
 	for script in scripts:
 		proc_name = os.path.splitext(script['script'])[0]
-		log.info('\t%s' % proc_name)
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
-			message += '\taltering routine %s\n' % proc_name
+			log.info('\taltering routine %s\n' % proc_name)
 			cursor.execute(script['sql'])
-	log.info(message)
 	log.info('Routines update done.')
 	log.info('Updating schema_info.last_update')
 	query = 'update schema_info set last_update = getdate()'
