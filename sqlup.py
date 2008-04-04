@@ -134,7 +134,7 @@ def dump_tables(cur):
 	for table in cur.fetchall():
 		t = table[0]
 		t_columns = []
-		query = "S1ELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = 'dbo' AND table_name = %s ORDER BY ordinal_position ASC"
+		query = "SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = 'dbo' AND table_name = %s ORDER BY ordinal_position ASC"
 		cur.execute(query, (t,))
 		for col in cur.fetchall():
 			column = {}
