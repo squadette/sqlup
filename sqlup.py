@@ -24,10 +24,9 @@ def print_exception():
 		traceback.print_exception(sys.exc_type, sys.exc_value, sys.exc_traceback, None, out)
 		ret = out.getvalue()
 		out.close()
-		log.debug(ret)
+		log.debug('\nException raised. ' + ret)
 	else:
-		log.error('%s: %s\n\t(use --verbose option to see full stacktrace)\n' % (sys.exc_type.__name__, sys.exc_value))
-
+		log.error('\n%s: %s\n\t(use --verbose option to see full stacktrace)\n' % (sys.exc_type.__name__, sys.exc_value))
 
 
 def listdir(dir, ext=None):
@@ -44,6 +43,7 @@ def listdir(dir, ext=None):
 				continue
 			ret.append(str)
 	return ret
+
 
 def get_config(filename):
 	"""
@@ -73,6 +73,7 @@ def get_config(filename):
 	}
 	ret.update(cnf.defaults())
 	return ret
+
 
 def dump_routines(cur, type):
 	"""
@@ -133,7 +134,7 @@ def dump_tables(cur):
 	for table in cur.fetchall():
 		t = table[0]
 		t_columns = []
-		query = "SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = 'dbo' AND table_name = %s ORDER BY ordinal_position ASC"
+		query = "S1ELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = 'dbo' AND table_name = %s ORDER BY ordinal_position ASC"
 		cur.execute(query, (t,))
 		for col in cur.fetchall():
 			column = {}
@@ -246,7 +247,9 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 					else:
 						mig_scripts = refine_scripts(scripts[MIGR_DIR], db_version + 1, to_version, skip)
 						field = 'sqlup'
+					log.info('Running migrations scripts...')
 					run_scripts(mig_scripts, field, cur)
+					log.info('Migrations scripts done')
 					log.info('Updating schema_info table')
 					query = 'update schema_info set schema_version = %i, last_update = getdate()' % to_version
 					cur.execute(query)
@@ -273,6 +276,7 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 			con.commit()
 			con.close()
 
+
 def refine_scripts(scripts, version1, version2, skip):
 	"""
 	Чистит список скриптов, полученный из директории, оставляя в нем
@@ -296,6 +300,7 @@ def find_routine_collision(cursor):
 	cursor.execute(query)
 	return cursor.fetchall()
 
+
 def find_table_collision(cursor):
 	"""
 	Возвращает список таблиц с временем изменения большим, 
@@ -304,6 +309,7 @@ def find_table_collision(cursor):
 	query = 'select name, modify_date from sys.tables t, schema_info s where t.modify_date > s.last_update'
 	cursor.execute(query)
 	return cursor.fetchall()
+
 
 def schema_info(cursor):
 	"""
@@ -327,22 +333,26 @@ def schema_info(cursor):
 		
 	return (db_version, last_update)
 
+
 def update_routines(scripts, cursor):
 	"""
 	Обновляет хранимые процедуры и функции в текущей БД
 	"""
-	message = 'Updating routines:\n'
+	log.info('Updating routines...')
 	for script in scripts:
 		proc_name = os.path.splitext(script['script'])[0]
+		log.info('\t%s' % proc_name)
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
 			message += '\taltering routine %s\n' % proc_name
 			cursor.execute(script['sql'])
 	log.info(message)
+	log.info('Routines update done.')
 	log.info('Updating schema_info.last_update')
 	query = 'update schema_info set last_update = getdate()'
 	cursor.execute(query)
+
 
 def run_scripts(scripts, field, cursor):
 	"""
@@ -354,6 +364,7 @@ def run_scripts(scripts, field, cursor):
 		cursor.execute(script[field])
 		cursor.execute('COMMIT')
 
+
 def extract_version(file):
 	"""
 	Выдирает начальные цифры из имени файла и склеивает их в INT
@@ -364,6 +375,7 @@ def extract_version(file):
 		log.error("Error: incorrect file name: %s" % file)
 		sys.exit(1)
 	return int(n.groups()[0])
+
 
 def get_scripts(dir, reverse=False):
 	"""
@@ -563,8 +575,10 @@ Samples:
 		elif not args[0] in actions:
 			startup_error("\"%s\" is not a valid action" % args[0])
 
-
-	actions[args[0]](options, args[1:], config)
+	try:
+		actions[args[0]](options, args[1:], config)
+	except DatabaseError, e:
+		print_exception()
 
 if __name__ == '__main__':
 	main()
