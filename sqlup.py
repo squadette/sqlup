@@ -14,6 +14,7 @@ LOGFORMAT = '%(message)s'
 PROC_DIR = 'procedures'
 FUNC_DIR = 'functions'
 MIGR_DIR = 'migration'
+TABLE_DIR = 'tables'
 SQLUP_CUT='-- SQLUP-CUT'
 
 
@@ -99,6 +100,54 @@ def dump_routines(cur, type):
 		})
 	return ret
 
+
+def dump_tables(cur):
+	ret = []
+	query = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES where table_schema = 'dbo' and table_type = 'BASE TABLE'"
+	cur.execute(query)
+	column_fields = (
+		'TABLE_CATALOG',
+		'TABLE_SCHEMA',
+		'TABLE_NAME',
+		'COLUMN_NAME',
+		'ORDINAL_POSITION',
+		'COLUMN_DEFAULT',
+		'IS_NULLABLE',
+		'DATA_TYPE',
+		'CHARACTER_MAXIMUM_LENGTH',
+		'CHARACTER_OCTET_LENGTH',
+		'NUMERIC_PRECISION',
+		'NUMERIC_PRECISION_RADIX',
+		'NUMERIC_SCALE',
+		'DATETIME_PRECISION',
+		'CHARACTER_SET_CATALOG',
+		'CHARACTER_SET_SCHEMA',
+		'CHARACTER_SET_NAME',
+		'COLLATION_CATALOG',
+		'COLLATION_SCHEMA',
+		'COLLATION_NAME',
+		'DOMAIN_CATALOG',
+		'DOMAIN_SCHEMA',
+		'DOMAIN_NAME',
+		)
+	for table in cur.fetchall():
+		t = table[0]
+		t_columns = []
+		query = "SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = 'dbo' AND table_name = %s ORDER BY ordinal_position ASC"
+		cur.execute(query, (t,))
+		for col in cur.fetchall():
+			column = {}
+			for i in range(len(column_fields)):
+				column[column_fields[i]] = col[i]
+			t_columns.append(column)
+		
+		ret.append({
+			'name': t,
+			'columns': t_columns,
+		})
+	return ret
+
+
 def get_routine_definition(cur, name):
 	definition = ""
 	cur.execute('set textsize 1000000')
@@ -122,6 +171,40 @@ def save_routine(dir, proc):
 	f = open(fname, 'w')
 	f.write(proc['definition'])
 	f.close()
+
+
+def save_table(dir, table):
+	"""
+	Сохраняет DDL таблицы в файл в указанной директории
+	"""
+	definition = 'CREATE TABLE [dbo].[%s] (\n\t' % table['name']
+	cols_def = []
+	for col in table['columns']:
+		col['size'] = ''
+		#for s in ('CHARACTER_MAXIMUM_LENGTH', 'NUMERIC_PRECISION', 'DATETIME_PRECISION'):
+		for s in ('CHARACTER_MAXIMUM_LENGTH',):
+			if col[s]: col['size'] = '(%s)' % col[s]
+		col['collation'] = ''
+		if col['COLLATION_NAME']: col['collation'] = 'COLLATE ' + col['COLLATION_NAME']
+		col['nullable'] = 'NULL'
+		if col['IS_NULLABLE'] == 'NO': col['nullable'] = 'NOT NULL'
+		col['default'] = ''
+		if col['COLUMN_DEFAULT']:
+			col['default'] = "'%s'" % col['COLUMN_DEFAULT']
+		#print col
+		str = '[%(COLUMN_NAME)s] [%(DATA_TYPE)s]%(size)s %(collation)s %(default)s %(nullable)s' % col
+		cols_def.append(str)
+	
+	definition += ',\n\t'.join(cols_def)
+	definition += '\n);\n'
+	log.debug('definition for table %s:\n%s' % (table['name'], definition))
+
+	fname = dir + os.sep + table['name'] + '.sql'
+	log.info('writing %s' % fname)
+	f = open(fname, 'w')
+	f.write(definition)
+	f.close()
+
 
 def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, skip=[]):
 	"""
@@ -415,6 +498,13 @@ def action_dump(options, args, config):
 		os.makedirs(dir)
 	for func in funcs:
 		save_routine(dir, func)
+
+	tables = dump_tables(cur)
+	dir = args[0] + os.sep + TABLE_DIR
+	if not os.path.exists(dir):
+		os.makedirs(dir)
+	for t in tables:
+		save_table(dir, t)
 
 	con.close()
 
