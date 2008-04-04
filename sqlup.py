@@ -273,7 +273,7 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 					log.info("Ignoring collisions.")
 				else:
 					log.info('\nTo migrate schema while collision detected, use options "--ignore"')
-			if ignore or not (tcoll pr rcoll):
+			if ignore or not (tcoll or rcoll):
 				update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
 
 
