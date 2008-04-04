@@ -235,8 +235,14 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 			
 			tcoll = find_table_collision(cur)
 			rcoll = find_routine_collision(cur)
-			if ignore:
-				log.info("Ignoring collisions")
+			if tcoll:
+				log.error('Table collision(s) detected:\n')
+				for coll in tcoll:
+					log.error('\ttable %s is altered at %s\n' % coll)
+				if ignore:
+					log.info("Ignoring collisions.")
+				else:
+					log.info('\nTo migrate schema while collision detected, use option "--ignore"')
 
 			if ignore or skip or not (tcoll or rcoll):
 				if update_needed:
@@ -259,19 +265,17 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 					else:
 						log.info('Database schema version %i, no need to update/rollback to version %i' % (db_version, to_version))
 
-			if ignore or not rcoll:
+			if rcoll:
+				log.error('Routine collision(s) detected:\n')
+				for coll in rcoll:
+					log.error('\troutine %s is altered at %s\n' % coll)
+				if ignore:
+					log.info("Ignoring collisions.")
+				else:
+					log.info('\nTo migrate schema while collision detected, use options "--ignore"')
+			if ignore or not (tcoll pr rcoll):
 				update_routines(scripts[PROC_DIR] + scripts[FUNC_DIR], cur)
 
-			if rcoll or tcoll:
-				message = 'Collision(s) detected:\n'
-				for coll in tcoll:
-					message += "\ttable %s is altered at %s\n" % coll
-				for coll in rcoll:
-					message += "\troutine %s is altered at %s\n" % coll
-				log.warning(message)
-				
-				if not ignore or not skip:
-					log.info('\nTo migrate schema while collision detected, use options "--ignore" or "skip"')
 
 			con.commit()
 			con.close()
@@ -344,7 +348,7 @@ def update_routines(scripts, cursor):
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
 		if cursor.rowcount > 0:
-			log.info('\taltering routine %s\n' % proc_name)
+			log.info('\t' + proc_name)
 			cursor.execute(script['sql'])
 	log.info('Routines update done.')
 	log.info('Updating schema_info.last_update')
@@ -357,7 +361,7 @@ def run_scripts(scripts, field, cursor):
 	Выполняет в базе код из поля field массива scripts
 	"""
 	for script in scripts:
-		log.info('\trunnig %s from script %s' % (field, script['script']))
+		log.info('\t' + script['script'])
 		cursor.execute('BEGIN TRAN')
 		cursor.execute(script[field])
 		cursor.execute('COMMIT')
