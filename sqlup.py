@@ -248,7 +248,7 @@ def migrate(servers, schema_dir, rollback=False, ignore=False, to_version=None, 
 				if update_needed:
 					log.info('Migrating database schema to version %i' % to_version)
 					if rollback:
-						mig_scripts = refine_scripts(scripts[MIGR_DIR], to_version, db_version, skip)
+						mig_scripts = refine_scripts(scripts[MIGR_DIR], to_version + 1, db_version, skip)
 						field = 'sqldown'
 					else:
 						mig_scripts = refine_scripts(scripts[MIGR_DIR], db_version + 1, to_version, skip)
