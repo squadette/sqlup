@@ -579,7 +579,7 @@ Samples:
 
 	try:
 		actions[args[0]](options, args[1:], config)
-	except DatabaseError, e:
+	except Exception:
 		print_exception()
 
 if __name__ == '__main__':
