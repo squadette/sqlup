@@ -363,7 +363,11 @@ def run_scripts(scripts, field, cursor):
 	for script in scripts:
 		log.info('\t' + script['script'])
 		cursor.execute('BEGIN TRAN')
-		cursor.execute(script[field])
+		s = '\n'.join(script[field].splitlines())
+		batches = s.split('\nGO\n')
+		for sql in batches:
+			log.debug('Running query: "%s"' % sql)
+			cursor.execute(sql)
 		cursor.execute('COMMIT')
 
 
@@ -438,7 +442,7 @@ def validate_schema_dir(config, dir):
 			subdir = os.path.join(db_dir, d)
 			if not os.path.isdir(subdir):
 				valid = False
-				log.error('Error: necessary directory "%s" not found in db directory %s' % (db_dir, subdir))
+				log.error('Error: necessary directory "%s" not found in db directory %s' % (subdir, db_dir))
 	return valid
 
 
