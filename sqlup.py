@@ -350,6 +350,8 @@ def update_routines(scripts, cursor):
 		if cursor.rowcount > 0:
 			log.info('\t' + proc_name)
 			cursor.execute(script['sql'])
+		else:
+			raise Exception('Procedure %s does not exist' % proc_name)
 	log.info('Routines update done.')
 	log.info('Updating schema_info.last_update')
 	query = 'update schema_info set last_update = getdate()'
