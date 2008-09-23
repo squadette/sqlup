@@ -483,7 +483,7 @@ def action_rollback(options, args, config):
 		return
 		
 	servers = config['servers']
-	migrate(servers, schema_dir, rollback=True, to_version=to_version, skip=skip)
+	migrate(servers, schema_dir, ignore=options.ignore, rollback=True, to_version=to_version, skip=skip)
 
 
 def action_dump(options, args, config):
