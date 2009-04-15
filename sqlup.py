@@ -101,7 +101,7 @@ def dump_routines(cur, type):
 		})
 	return ret
 
-def dump_indexes(cur, table):
+def dump_indexes(cur, table, table_info):
 	"""
 	Вытаскивает индексы к таблице table
 	"""
@@ -112,14 +112,20 @@ def dump_indexes(cur, table):
 	for row in cur.fetchall():
 		flags = re.sub(r' located on (.*)', '', row[1]).split(', ')
 		location = re.findall(r'located on (.*)', row[1])[0]
-		ret.append({
+		index_info = {
 			'name' : row[0],
 			'columns' : row[2].split(', '),
 			'flags' : flags,
 			'location' : location
-		})
+		}
+		if "primary key" in index_info['flags'] and len(index_info['columns']) == 1:
+			for column in table_info['columns']:
+				if column['COLUMN_NAME'] == index_info['columns'][0]:
+					column['primary'] = index_info
+		else:
+			ret.append(index_info)
 	print ret
-	return ret
+	table_info['indexes'] = ret
 
 def dump_tables(cur):
 	ret = []
@@ -161,11 +167,12 @@ def dump_tables(cur):
 				column[column_fields[i]] = col[i]
 			t_columns.append(column)
 		
-		ret.append({
+		table_info = {
 			'name': t,
 			'columns': t_columns,
-			'indexes': dump_indexes(cur, t),
-		})
+		}
+		dump_indexes(cur, t, table_info)
+		ret.append(table_info)
 	return ret
 
 
@@ -212,8 +219,12 @@ def save_table(dir, table):
 		col['default'] = ''
 		if col['COLUMN_DEFAULT']:
 			col['default'] = "'%s'" % col['COLUMN_DEFAULT']
+		if col.has_key('primary') and col['primary']:
+			col['primary'] = "PRIMARY KEY"
+		else:
+			col['primary'] = ""
 		#print col
-		str = '[%(COLUMN_NAME)s] [%(DATA_TYPE)s]%(size)s %(collation)s %(default)s %(nullable)s' % col
+		str = '[%(COLUMN_NAME)s] [%(DATA_TYPE)s]%(size)s %(collation)s %(default)s %(nullable)s %(primary)s' % col
 		cols_def.append(str)
 	
 	definition += ',\n\t'.join(cols_def)
