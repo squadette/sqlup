@@ -417,11 +417,11 @@ def update_routines(scripts, cursor):
 		proc_name = os.path.splitext(script['script'])[0]
 		query = 'SELECT specific_name FROM INFORMATION_SCHEMA.ROUTINES where specific_name = %s'
 		cursor.execute(query, (proc_name,))
-		if cursor.rowcount > 0:
-			log.info('\t' + proc_name)
-			cursor.execute(script['sql'])
-		else:
-			raise Exception('Procedure %s does not exist' % proc_name)
+		if cursor.rowcount == 0:
+			script['sql'] = re.sub(r'ALTER (\w+)', r'CREATE \1', script['sql'])
+		log.info('\t' + proc_name)
+		cursor.execute(script['sql'])
+
 	log.info('Routines update done.')
 	log.info('Updating schema_info.last_update')
 	query = 'update schema_info set last_update = getdate()'
