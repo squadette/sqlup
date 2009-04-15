@@ -115,6 +115,7 @@ def dump_indexes(cur, table, table_info):
 		index_info = {
 			'name' : row[0],
 			'columns' : row[2].split(', '),
+			'column_list' : row[2],
 			'flags' : flags,
 			'location' : location
 		}
@@ -229,6 +230,21 @@ def save_table(dir, table):
 	
 	definition += ',\n\t'.join(cols_def)
 	definition += '\n);\n'
+	
+	for index in table['indexes']:
+		if "unique" in index['flags']:
+			index["unique"] = "UNIQUE"
+		else:
+			index["unique"] = ""
+		if "clustered" in index['flags']:
+			index["clustered"] = "CLUSTERED"
+		else:
+			index["clustered"] = "NONCLUSTERED"
+		index["table_name"] = table['name']
+		
+		definition += "CREATE %(unique)s %(clustered)s INDEX [%(name)s] ON [%(table_name)s] (%(column_list)s);\n" % index
+
+
 	log.debug('definition for table %s:\n%s' % (table['name'], definition))
 
 	fname = dir + os.sep + table['name'] + '.sql'
