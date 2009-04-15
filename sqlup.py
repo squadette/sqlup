@@ -101,6 +101,25 @@ def dump_routines(cur, type):
 		})
 	return ret
 
+def dump_indexes(cur, table):
+	"""
+	Вытаскивает индексы к таблице table
+	"""
+	ret = []
+	query = "EXEC sp_helpindex %s"
+	cur.execute(query, (table,))
+	print "Indexes for table %s" % table
+	for row in cur.fetchall():
+		flags = re.sub(r' located on (.*)', '', row[1]).split(', ')
+		location = re.findall(r'located on (.*)', row[1])[0]
+		ret.append({
+			'name' : row[0],
+			'columns' : row[2].split(', '),
+			'flags' : flags,
+			'location' : location
+		})
+	print ret
+	return ret
 
 def dump_tables(cur):
 	ret = []
@@ -145,6 +164,7 @@ def dump_tables(cur):
 		ret.append({
 			'name': t,
 			'columns': t_columns,
+			'indexes': dump_indexes(cur, t),
 		})
 	return ret
 
