@@ -101,14 +101,13 @@ def dump_routines(cur, type):
 		})
 	return ret
 
-def dump_indexes(cur, table, table_info):
+def dump_indexes(cur, table_info):
 	"""
 	Вытаскивает индексы к таблице table
 	"""
 	ret = []
 	query = "EXEC sp_helpindex %s"
-	cur.execute(query, (table,))
-	print "Indexes for table %s" % table
+	cur.execute(query, (table_info['name'],))
 	for row in cur.fetchall():
 		flags = re.sub(r' located on (.*)', '', row[1]).split(', ')
 		location = re.findall(r'located on (.*)', row[1])[0]
@@ -125,8 +124,21 @@ def dump_indexes(cur, table, table_info):
 					column['primary'] = index_info
 		else:
 			ret.append(index_info)
-	print ret
 	table_info['indexes'] = ret
+
+def dump_constraints(cur, table_info):
+	ret = []
+	query = "select CCU.table_name src_table, CCU.constraint_name src_constraint, CCU.column_name src_col, KCU.table_name target_table, KCU.column_name target_col from INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE CCU, INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS RC, INFORMATION_SCHEMA.KEY_COLUMN_USAGE KCU where CCU.constraint_name = RC.constraint_name and KCU.constraint_name = RC.unique_constraint_name AND CCU.table_name = '%s' order by CCU.constraint_name" % table_info['name']
+	cur.execute(query)
+	for row in cur.fetchall():
+		for column in table_info['columns']:
+			if column['COLUMN_NAME'] == row[2]:
+				column['foreign_key'] = {
+					'name' : row[1],
+					'target_table' : row[3],
+					'target_column' : row[4],
+					} 
+	
 
 def dump_tables(cur):
 	ret = []
@@ -172,7 +184,8 @@ def dump_tables(cur):
 			'name': t,
 			'columns': t_columns,
 		}
-		dump_indexes(cur, t, table_info)
+		dump_indexes(cur, table_info)
+		dump_constraints(cur, table_info)
 		ret.append(table_info)
 	return ret
 
@@ -221,11 +234,21 @@ def save_table(dir, table):
 		if col['COLUMN_DEFAULT']:
 			col['default'] = "'%s'" % col['COLUMN_DEFAULT']
 		if col.has_key('primary') and col['primary']:
-			col['primary'] = "PRIMARY KEY"
+			primary = "PRIMARY KEY"
+			if "clustered" in col['primary']['flags']:
+				primary += " CLUSTERED"
+			else:
+				primary += " NONCLUSTERED"
+			col['primary'] = primary
 		else:
 			col['primary'] = ""
+		if col.has_key('foreign_key') and col['foreign_key']:
+			fk = "FOREIGN KEY REFERENCES %(target_table)s (%(target_column)s)" % col['foreign_key']
+			col['foreign_key'] = fk
+		else:
+			col['foreign_key'] = ""
 		#print col
-		str = '[%(COLUMN_NAME)s] [%(DATA_TYPE)s]%(size)s %(collation)s %(default)s %(nullable)s %(primary)s' % col
+		str = '[%(COLUMN_NAME)s] [%(DATA_TYPE)s]%(size)s %(collation)s %(default)s %(nullable)s %(primary)s %(foreign_key)s' % col
 		cols_def.append(str)
 	
 	definition += ',\n\t'.join(cols_def)
